@@ -26,16 +26,20 @@ permissions:
 
 jobs:
   build-linux:
-    name: Build linux-${{ matrix.arch }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - target: linux-amd64
+            arch: amd64
             runner: ubuntu-24.04
-          - arch: arm64
+            raspberry_pi_alias: false
+          - target: linux-arm64
+            arch: arm64
             runner: ubuntu-24.04-arm
+            raspberry_pi_alias: true
 
     steps:
       - name: Checkout repository
@@ -69,11 +73,17 @@ jobs:
             LICENSE \
             Changelog.md
 
+          if [ "${{ matrix.raspberry_pi_alias }}" = "true" ]; then
+            cp \
+              dist/proton-bridge-linux-${{ matrix.arch }}.tar.gz \
+              dist/proton-bridge-linux-raspberry-pi-${{ matrix.arch }}.tar.gz
+          fi
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proton-bridge-linux-${{ matrix.arch }}
-          path: dist/proton-bridge-linux-${{ matrix.arch }}.tar.gz
+          name: proton-bridge-${{ matrix.target }}
+          path: dist/proton-bridge-linux-*.tar.gz
           if-no-files-found: error
 
   publish-release:
@@ -129,3 +139,4 @@ jobs:
           files: |
             dist/**/proton-bridge-linux-amd64.tar.gz
             dist/**/proton-bridge-linux-arm64.tar.gz
+            dist/**/proton-bridge-linux-raspberry-pi-arm64.tar.gz
