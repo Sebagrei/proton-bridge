@@ -1,0 +1,131 @@
+name: Build and publish Linux binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to upload assets to"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag_name:
+        required: false
+        type: string
+      target_commitish:
+        required: false
+        type: string
+      release_name:
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libsecret-1-dev \
+            libfido2-dev \
+            libcbor-dev \
+            libssl-dev
+
+      - name: Build without GUI
+        run: make build-nogui
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          tar -czf dist/proton-bridge-linux-${{ matrix.arch }}.tar.gz \
+            proton-bridge \
+            bridge \
+            LICENSE \
+            Changelog.md
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proton-bridge-linux-${{ matrix.arch }}
+          path: dist/proton-bridge-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish release assets
+    runs-on: ubuntu-24.04
+    needs: build-linux
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+
+      - name: Resolve release metadata
+        id: meta
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tag_name || github.event.inputs.tag_name || '' }}
+          EVENT_TAG_NAME: ${{ github.event.release.tag_name || '' }}
+          INPUT_TARGET_COMMITISH: ${{ inputs.target_commitish || '' }}
+          INPUT_RELEASE_NAME: ${{ inputs.release_name || '' }}
+        run: |
+          TAG_NAME="${INPUT_TAG_NAME}"
+          if [ -z "${TAG_NAME}" ]; then
+            TAG_NAME="${EVENT_TAG_NAME}"
+          fi
+          if [ -z "${TAG_NAME}" ]; then
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+
+          if [ -z "${TAG_NAME}" ]; then
+            echo "Unable to determine release tag name." >&2
+            exit 1
+          fi
+
+          TARGET_COMMITISH="${INPUT_TARGET_COMMITISH:-${GITHUB_SHA}}"
+          RELEASE_NAME="${INPUT_RELEASE_NAME}"
+
+          {
+            echo "tag_name=${TAG_NAME}"
+            echo "target_commitish=${TARGET_COMMITISH}"
+            echo "release_name=${RELEASE_NAME}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Publish artifacts to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          target_commitish: ${{ steps.meta.outputs.target_commitish }}
+          name: ${{ steps.meta.outputs.release_name }}
+          generate_release_notes: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/**/proton-bridge-linux-amd64.tar.gz
+            dist/**/proton-bridge-linux-arm64.tar.gz
