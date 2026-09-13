@@ -1,0 +1,70 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-default-branch:
+    runs-on: ubuntu-24.04
+    outputs:
+      upstream_changed: ${{ steps.sync.outputs.upstream_changed }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+      release_tag: ${{ steps.sync.outputs.release_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Sync fork branch
+        id: sync
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          UPSTREAM_REPOSITORY: ProtonMail/proton-bridge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git remote get-url upstream > /dev/null 2>&1; then
+            git remote set-url upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          else
+            git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          fi
+
+          git fetch origin "${DEFAULT_BRANCH}" --prune
+          git fetch upstream "${DEFAULT_BRANCH}" --prune
+
+          FORK_SHA=$(git rev-parse "origin/${DEFAULT_BRANCH}")
+          UPSTREAM_SHA=$(git rev-parse "upstream/${DEFAULT_BRANCH}")
+
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "${GITHUB_OUTPUT}"
+
+          if [ "${FORK_SHA}" = "${UPSTREAM_SHA}" ]; then
+            echo "upstream_changed=false" >> "${GITHUB_OUTPUT}"
+            echo "release_tag=" >> "${GITHUB_OUTPUT}"
+            echo "Fork is already up to date."
+            exit 0
+          fi
+
+          git checkout -B "${DEFAULT_BRANCH}" "origin/${DEFAULT_BRANCH}"
+          git merge --ff-only "upstream/${DEFAULT_BRANCH}"
+          git push origin "HEAD:${DEFAULT_BRANCH}"
+
+          SHORT_SHA=$(printf '%s' "${UPSTREAM_SHA}" | cut -c1-12)
+          echo "upstream_changed=true" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=upstream-sync-${SHORT_SHA}" >> "${GITHUB_OUTPUT}"
+
+  build-and-publish:
+    needs: sync-default-branch
+    if: needs.sync-default-branch.outputs.upstream_changed == 'true'
+    uses: ./.github/workflows/build-release-linux.yml
+    with:
+      tag_name: ${{ needs.sync-default-branch.outputs.release_tag }}
+      target_commitish: ${{ needs.sync-default-branch.outputs.upstream_sha }}
+      release_name: Upstream sync build ${{ needs.sync-default-branch.outputs.upstream_sha }}

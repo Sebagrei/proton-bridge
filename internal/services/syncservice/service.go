@@ -44,7 +44,7 @@ func NewService(
 	reporter reporter.Reporter,
 	featureFlagProvider unleash.FeatureFlagValueProvider,
 ) *Service {
-	limits := newSyncLimits(2 * Gigabyte)
+	limits := newSyncLimits(1536 * Megabyte)
 
 	metaCh := NewChannelConsumerProducer[*Job]()
 	downloadCh := NewChannelConsumerProducer[DownloadRequest]()

@@ -19,6 +19,7 @@ package syncservice
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/pbnjay/memory"
 	"github.com/sirupsen/logrus"
@@ -44,6 +45,10 @@ type syncLimits struct {
 }
 
 func newSyncLimits(maxSyncMemory uint64) syncLimits {
+	return newSyncLimitsForSystem(maxSyncMemory, memory.TotalMemory(), runtime.GOARCH)
+}
+
+func newSyncLimitsForSystem(maxSyncMemory, totalMemory uint64, goArch string) syncLimits {
 	limits := syncLimits{
 		// There's no point in using more than 128MB of download data per stage, after that we reach a point of diminishing
 		// returns as we can't keep the pipeline fed fast enough.
@@ -74,8 +79,6 @@ func newSyncLimits(maxSyncMemory uint64) syncLimits {
 	// Expected mem usage for this whole process should be the sum of MaxMessageBuildingMem and MaxDownloadRequestMem
 	// times x due to pipeline and all additional memory used by network requests and compression+io.
 
-	totalMemory := memory.TotalMemory()
-
 	if limits.MaxSyncMemory >= totalMemory/2 {
 		logrus.Warnf("Requested max sync memory of %v MB is greater than half of system memory (%v MB), forcing to half of system memory",
 			toMB(limits.MaxSyncMemory), toMB(totalMemory/2))
@@ -95,8 +98,14 @@ func newSyncLimits(maxSyncMemory uint64) syncLimits {
 		if limits.MaxSyncMemory < 800*Megabyte {
 			logrus.Warnf("System has less than 800MB of memory, you may experience issues sycing large mailboxes")
 		}
-		limits.DownloadRequestMem = limits.MinDownloadRequestMem
-		limits.MessageBuildMem = limits.MinMessageBuildingMem
+		if goArch == "arm64" && limits.MaxSyncMemory >= 1500*Megabyte {
+			limits.DownloadRequestMem = min(64*Megabyte, limits.MaxDownloadRequestMem)
+			limits.MessageBuildMem = min(96*Megabyte, limits.MaxMessageBuildingMem)
+			limits.MaxParallelDownloads = min(16, limits.MaxParallelDownloads)
+		} else {
+			limits.DownloadRequestMem = limits.MinDownloadRequestMem
+			limits.MessageBuildMem = limits.MinMessageBuildingMem
+		}
 	case limits.MaxSyncMemory == 2*Gigabyte:
 		// Increasing the max download capacity has very little effect on sync speed. We could increase the download
 		// memory but the user would see less sync notifications. A smaller value here leads to more frequent
